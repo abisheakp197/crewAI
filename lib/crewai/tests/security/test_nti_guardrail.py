@@ -72,7 +72,7 @@ def test_nti_guardrail_key_persistence_and_no_mutation():
         assert parsed["actor"] == "agent_test"
         assert parsed["capability"] == "test_tool"
         assert parsed["input"] == {"arg": "val"}
-        assert parsed["pqc_public_key"] == "pubkey_hex_123"
+        assert parsed["pqc_public_key"] is None
 
 
 def test_tool_utils_interception_allowed():

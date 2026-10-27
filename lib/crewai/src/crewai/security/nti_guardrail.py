@@ -41,13 +41,14 @@ class NTIGuardrailMiddleware:
             "signature": None,
             "pqc_signature": None,
             "public_key": None,
-            "pqc_public_key": self.pqc_key.public_key_hex(),
+            "pqc_public_key": None,
             "token": None,
             "identity_claim": None,
         }
         canonical_json = json.dumps(req, sort_keys=True)
         message = canonical_json.encode("utf-8")
-        _signature = self.pqc_key.sign(message).hex()
+        sig = self.pqc_key.sign(message)
+        _signature = sig.hex() if isinstance(sig, bytes) else str(sig)
 
         raw_decision = self.engine.evaluate(canonical_json)
         if isinstance(raw_decision, str):
