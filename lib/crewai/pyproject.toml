@@ -124,6 +124,9 @@ file-processing = [
 qdrant-edge = [
     "qdrant-edge-py>=0.6.0",
 ]
+nti = [
+    "ube-foundation",
+]
 
 
 [tool.uv]

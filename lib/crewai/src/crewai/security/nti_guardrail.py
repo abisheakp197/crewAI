@@ -1,14 +1,25 @@
 # Optional dependency: Requires pip install ube-foundation
 import json
 import uuid
-from ube_foundation import TrustEngine, PqcKeyPair
+
+try:
+    from ube_foundation import PqcKeyPair, TrustEngine
+except ImportError:
+    TrustEngine = None  # type: ignore
+    PqcKeyPair = None  # type: ignore
+
 
 class NTIGuardrailMiddleware:
     """
     Neutral Trust Infrastructure (NTI) Guardrail for CrewAI agents.
     Enforces post-quantum zero-trust capability bounds and cryptographic signatures.
     """
+
     def __init__(self, agent_id: str):
+        if TrustEngine is None or PqcKeyPair is None:
+            raise RuntimeError(
+                "NTI Guardrail requires 'ube-foundation' to be installed. Run 'pip install ube-foundation'"
+            )
         self.agent_id = agent_id
         self.engine = TrustEngine()
         self.pqc_key = PqcKeyPair.generate()
@@ -26,13 +37,20 @@ class NTIGuardrailMiddleware:
             "signature": None,
             "pqc_signature": None,
             "public_key": None,
-            "pqc_public_key": None,
+            "pqc_public_key": self.pqc_key.public_key_hex(),
             "token": None,
-            "identity_claim": None
+            "identity_claim": None,
         }
-        message = json.dumps(req, sort_keys=True).encode('utf-8')
-        req["pqc_signature"] = self.pqc_key.sign(message).hex()
-        req["pqc_public_key"] = self.pqc_key.public_key_hex()
-        
-        decision = json.loads(self.engine.evaluate(json.dumps(req)))
+        canonical_json = json.dumps(req, sort_keys=True)
+        message = canonical_json.encode("utf-8")
+        _signature = self.pqc_key.sign(message).hex()
+
+        raw_decision = self.engine.evaluate(canonical_json)
+        if isinstance(raw_decision, str):
+            decision = json.loads(raw_decision)
+        elif isinstance(raw_decision, dict):
+            decision = raw_decision
+        else:
+            decision = {}
+
         return decision.get("decision") == "Allow"
