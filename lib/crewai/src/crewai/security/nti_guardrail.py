@@ -1,12 +1,13 @@
 # Optional dependency: Requires pip install ube-foundation
 import json
+from typing import Any
 import uuid
 
 try:
-    from ube_foundation import PqcKeyPair, TrustEngine
+    from ube_foundation import PqcKeyPair, TrustEngine  # type: ignore[import-untyped]
 except ImportError:
-    TrustEngine = None  # type: ignore
-    PqcKeyPair = None  # type: ignore
+    TrustEngine = None
+    PqcKeyPair = None
 
 
 class NTIGuardrailMiddleware:
@@ -22,12 +23,15 @@ class NTIGuardrailMiddleware:
             )
         self.agent_id = agent_id
         self.engine = TrustEngine()
-        self.pqc_key = PqcKeyPair.generate()
+        if hasattr(PqcKeyPair, "generate") and callable(getattr(PqcKeyPair, "generate")):
+            self.pqc_key = PqcKeyPair.generate()
+        else:
+            self.pqc_key = PqcKeyPair()
 
-    def grant_capability(self, capability: str):
+    def grant_capability(self, capability: str) -> None:
         self.engine.grant(self.agent_id, capability)
 
-    def verify_tool_execution(self, tool_name: str, tool_input: dict) -> bool:
+    def verify_tool_execution(self, tool_name: str, tool_input: dict[str, Any]) -> bool:
         req = {
             "id": f"req-{uuid.uuid4()}",
             "actor": self.agent_id,
@@ -53,4 +57,4 @@ class NTIGuardrailMiddleware:
         else:
             decision = {}
 
-        return decision.get("decision") == "Allow"
+        return bool(decision.get("decision") == "Allow")
