@@ -10,6 +10,7 @@ from crewai.hooks.tool_hooks import (
     run_before_tool_call_hooks,
 )
 from crewai.security.fingerprint import Fingerprint
+from crewai.security.nti_guardrail import NTIGuardrailMiddleware
 from crewai.tools.structured_tool import CrewStructuredTool
 from crewai.tools.tool_failure import (
     ToolFailure,
@@ -111,6 +112,15 @@ async def aexecute_tool_and_check_finality(
     tool = tool_name_to_tool_map.get(sanitized_tool_name)
     if tool:
         tool_input = tool_calling.arguments if tool_calling.arguments else {}
+
+        agent_id = str(getattr(agent, "key", None) or agent_role or "agent")
+        try:
+            middleware = NTIGuardrailMiddleware(agent_id=agent_id)
+            if not middleware.verify_tool_execution(sanitized_tool_name, tool_input):
+                raise PermissionError("NTI Security: Tool execution denied.")
+        except RuntimeError:
+            pass
+
         hook_context = ToolCallHookContext(
             tool_name=sanitized_tool_name,
             tool_input=tool_input,
@@ -274,6 +284,15 @@ def execute_tool_and_check_finality(
     tool = tool_name_to_tool_map.get(sanitized_tool_name)
     if tool:
         tool_input = tool_calling.arguments if tool_calling.arguments else {}
+
+        agent_id = str(getattr(agent, "key", None) or agent_role or "agent")
+        try:
+            middleware = NTIGuardrailMiddleware(agent_id=agent_id)
+            if not middleware.verify_tool_execution(sanitized_tool_name, tool_input):
+                raise PermissionError("NTI Security: Tool execution denied.")
+        except RuntimeError:
+            pass
+
         hook_context = ToolCallHookContext(
             tool_name=sanitized_tool_name,
             tool_input=tool_input,
