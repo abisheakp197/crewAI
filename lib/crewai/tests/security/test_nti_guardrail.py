@@ -1,4 +1,5 @@
 import json
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -129,3 +130,92 @@ def test_tool_utils_interception_denied():
             PermissionError, match="NTI Security: Tool execution denied."
         ):
             execute_tool_and_check_finality(agent_action=action, tools=[mock_tool])
+
+
+def test_is_public_ip():
+    """Verify is_public_ip identifies public vs private/reserved/loopback/metadata IPs."""
+    assert nti_module.is_public_ip("8.8.8.8") is True
+    assert nti_module.is_public_ip("1.1.1.1") is True
+    assert nti_module.is_public_ip("93.184.216.34") is True
+
+    # Private, loopback, link-local, metadata
+    assert nti_module.is_public_ip("127.0.0.1") is False
+    assert nti_module.is_public_ip("10.0.0.1") is False
+    assert nti_module.is_public_ip("172.16.0.1") is False
+    assert nti_module.is_public_ip("192.168.1.1") is False
+    assert nti_module.is_public_ip("169.254.169.254") is False
+    assert nti_module.is_public_ip("0.0.0.0") is False
+    assert nti_module.is_public_ip("::1") is False
+    assert nti_module.is_public_ip("::ffff:127.0.0.1") is False
+    assert nti_module.is_public_ip("::ffff:169.254.169.254") is False
+
+
+def test_validate_url_valid():
+    """Verify validate_url allows public URLs."""
+    mock_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+    with patch("socket.getaddrinfo", return_value=mock_addrinfo):
+        url = "https://example.com"
+        assert nti_module.validate_url(url) == url
+
+
+def test_validate_url_ssrf_blocked():
+    """Verify validate_url blocks non-public IPs, bad schemes, and metadata URLs."""
+    with pytest.raises(ValueError, match="forbidden"):
+        nti_module.validate_url("http://127.0.0.1/admin")
+
+    with pytest.raises(ValueError, match="forbidden"):
+        nti_module.validate_url("http://169.254.169.254/latest/meta-data/")
+
+    with pytest.raises(ValueError, match="forbidden"):
+        nti_module.validate_url("http://10.0.0.1/internal")
+
+    with pytest.raises(ValueError, match="Invalid URL scheme"):
+        nti_module.validate_url("file:///etc/passwd")
+
+    with pytest.raises(ValueError, match="Invalid URL scheme"):
+        nti_module.validate_url("ftp://example.com/file")
+
+    # Hostname resolving to private IP
+    mock_private_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 80))]
+    with patch("socket.getaddrinfo", return_value=mock_private_addrinfo):
+        with pytest.raises(ValueError, match="forbidden"):
+            nti_module.validate_url("http://internal-host.local")
+
+
+def test_socket_level_ip_pinning_prevents_dns_rebinding():
+    """Verify create_pinned_socket enforces socket-level IP checks before and after connect."""
+    # Pre-connect DNS rebinding attempt returning private IP
+    mock_rebind_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
+    with patch("socket.getaddrinfo", return_value=mock_rebind_addrinfo):
+        with pytest.raises(ValueError, match="forbidden"):
+            nti_module.create_pinned_socket("rebinding.host", 80)
+
+    # Post-connect peer IP check failure
+    mock_public_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+    mock_socket_obj = MagicMock()
+    mock_socket_obj.getpeername.return_value = ("169.254.169.254", 80)
+
+    with patch("socket.getaddrinfo", return_value=mock_public_addrinfo), patch(
+        "socket.socket", return_value=mock_socket_obj
+    ):
+        with pytest.raises(ValueError, match="forbidden"):
+            nti_module.create_pinned_socket("rebinding.host", 80)
+        assert mock_socket_obj.close.called
+
+
+def test_safe_request_redirect_revalidation():
+    """Verify safe_request re-validates redirect locations and blocks SSRF redirect chains."""
+    mock_addrinfo_public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+
+    redirect_response = MagicMock()
+    redirect_response.status_code = 302
+    redirect_response.headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+
+    mock_session = MagicMock()
+    mock_session.request.return_value = redirect_response
+
+    with patch("socket.getaddrinfo", return_value=mock_addrinfo_public), patch(
+        "crewai.security.nti_guardrail.create_safe_session", return_value=mock_session
+    ):
+        with pytest.raises(ValueError, match="forbidden"):
+            nti_module.safe_request("GET", "https://example.com")
